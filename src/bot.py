@@ -3,6 +3,7 @@ import io
 import os
 import tempfile
 import time
+import json
 
 import mailparser
 from imapclient import IMAPClient
@@ -43,11 +44,27 @@ class Bot:
         self.read_only = self.parser.getboolean("mail", "read_only", fallback=False)
         self.criteria = self.parser.get("mail", "criteria", fallback="UNSEEN")
         self.folder = self.parser.get("mail", "folder", fallback="INBOX")
+        self.ssl = self.parser.get("mail", "ssl", fallback=False)
 
         self.whitelist = [v for (k, v) in self.parser.items("whitelist")]
 
         if len(self.whitelist) > 0:
-            print("[LOG]: Ignoring emails except from:", self.whitelist)
+            print("[LOG]: Whitelist:", self.whitelist)
+
+        if self.read_only:
+            try:
+                with open(".mnbs") as bot_state_file:
+
+                    bot_state = json.load(bot_state_file)
+
+                    self.last_uid = max(self.last_uid, int(bot_state["last_uid"]))
+            except FileNotFoundError:
+                print("[LOG]: Creating bot state file...")
+
+                bot_state = {"last_uid": 0}
+
+                with open(".mnbs", "w") as state_file:
+                    json.dump(bot_state, state_file)
 
         self.bot_token = self.parser.get("tg", "token")
         self.chat = self.parser.get("tg", "chat_id")
@@ -56,7 +73,7 @@ class Bot:
 
     def get_emails(self):
 
-        with IMAPClient(self.host) as server:
+        with IMAPClient(self.host, ssl=self.ssl) as server:
 
             server.login(self.login, self.password)
             server.select_folder(self.folder, readonly=self.read_only)
@@ -136,16 +153,24 @@ class Bot:
 
         print("[LOG]: Initialized.")
 
+        last_uid = None
+
         for email, mail_id in self.get_emails():
 
             print("[LOG]: Processing mail:", mail_id)
 
             sent = self.send_mail(email)
 
-            self.parser.set("mail", "last_uid", str(mail_id))
-            self.parser.write(open(self.config_file, "w"))
+            last_uid = str(mail_id)
 
             if sent:
                 time.sleep(5)
+
+        if not (last_uid is None) and self.read_only:
+
+            bot_state = {"last_uid": last_uid}
+
+            with open(".mnbs", "w") as state_file:
+                json.dump(bot_state, state_file)
 
         print("[LOG]: All emails processed.")
