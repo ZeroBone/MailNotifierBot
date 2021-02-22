@@ -4,11 +4,15 @@ import os
 import tempfile
 import time
 import json
+import logging
 
 import mailparser
 from imapclient import IMAPClient
+from imapclient.exceptions import LoginError
 from telebot import TeleBot
 
+
+logger = logging.getLogger(__name__)
 
 message_breakers = ["\n", ", "]
 
@@ -49,7 +53,7 @@ class Bot:
         self.whitelist = [v for (k, v) in self.parser.items("whitelist")]
 
         if len(self.whitelist) > 0:
-            print("[LOG]: Whitelist:", self.whitelist)
+            logger.info("Whitelist enabled: %s", ",".join(self.whitelist))
 
         if self.read_only:
             try:
@@ -59,7 +63,8 @@ class Bot:
 
                     self.last_uid = max(self.last_uid, int(bot_state["last_uid"]))
             except FileNotFoundError:
-                print("[LOG]: Creating bot state file...")
+                logger.warning("The state file was not found, is this the first startup?")
+                logger.info("Creating bot state file...")
 
                 bot_state = {"last_uid": 0}
 
@@ -75,7 +80,12 @@ class Bot:
 
         with IMAPClient(self.host, ssl=self.ssl) as server:
 
-            server.login(self.login, self.password)
+            try:
+                server.login(self.login, self.password)
+            except LoginError:
+                logger.error("Could not authenticate.")
+                return
+
             server.select_folder(self.folder, readonly=self.read_only)
 
             mails = server.search(self.criteria)
@@ -99,14 +109,14 @@ class Bot:
         sender_email_raw = mail.from_[0][1]
 
         if len(self.whitelist) > 0 and sender_email_raw not in self.whitelist:
-            print("[LOG]: Ignoring email from:", sender_email_raw)
+            logger.info("Ignoring email from: %s", sender_email_raw)
             return False
 
         sender_email = " ".join(mail.from_[0])
 
         title = "{} from {}".format(subject, sender_email)
 
-        print("[LOG]: Sending mail:", title)
+        logger.info("Sending mail: %s", title)
 
         if mail.text_html:
 
@@ -151,13 +161,13 @@ class Bot:
 
         self.bot = TeleBot(self.bot_token)
 
-        print("[LOG]: Initialized.")
+        logger.info("Initialized.")
 
         last_uid = None
 
         for email, mail_id in self.get_emails():
 
-            print("[LOG]: Processing mail:", mail_id)
+            logger.info("Processing mail: %s", mail_id)
 
             sent = self.send_mail(email)
 
@@ -173,4 +183,4 @@ class Bot:
             with open(".mnbs", "w") as state_file:
                 json.dump(bot_state, state_file)
 
-        print("[LOG]: All emails processed.")
+        logger.info("All emails processed.")
